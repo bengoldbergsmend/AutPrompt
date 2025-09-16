@@ -1,32 +1,71 @@
-
 name: Mend CLI Scan
 
 on:
-  workflow_dispatch
+  workflow_dispatch:
+    inputs:
+      append_date:
+        description: "Append _YYYYMMDD to project name"
+        type: boolean
+        default: true
 
 jobs:
-  build:
-        runs-on: ubuntu-latest
+  mend-scan:
+    runs-on: ubuntu-latest
 
-        steps:
-        - uses: actions/checkout@v3
-        # Add your package manager build here
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set variables
+      - name: Set variables (APP_NAME/PROJECT_NAME)
+        shell: bash
         run: |
-          echo "APP_NAME=${GITHUB_REPOSITORY_OWNER}" >> $GITHUB_ENV
-          echo "PROJECT_NAME=$(basename $GITHUB_REPOSITORY)_$(date +%Y%m%d)" >> $GITHUB_ENV
+          # Fixed org for Mend
+          echo "ORG=beng_demo_gh" >> "$GITHUB_ENV"
 
+          # App name from GitHub repository owner (organization/user)
+          APP_NAME="${GITHUB_REPOSITORY_OWNER}"
 
-        - name: Mend CLI Scan
-          env:
-            MEND_EMAIL: ${{secrets.MEND_EMAIL_BEN_TEST}}
-            MEND_USER_KEY: ${{secrets.MEND_EMAIL_BEN_TEST_KEY}}
-            MEND_URL: https://saas-eu.mend.io
-          run: |
-            echo Downloading Mend CLI
-            curl -LJO https://downloads.mend.io/production/unified/latest/linux_amd64/mend && chmod +x mend 
-            echo Start Mend CLI scan
-            ./mend dep -u -s "beng_demo_gh//${APP_NAME}//${PROJECT_NAME}" -r
-            ./mend code -s "beng_demo_gh//${APP_NAME}//${PROJECT_NAME}" --snippet-size 0
-            ./mend image ubuntu:latest --scope "beng_demo_gh//${APP_NAME}//${PROJECT_NAME}"
+          # Sanitize a string to Mend-friendly: letters, numbers, dot, underscore, hyphen
+          sanitize () { tr -cs 'A-Za-z0-9._-' '_' | sed 's/^_//; s/_$//'; }
+
+          # Base project name from repo name
+          REPO_BASE="$(basename "$GITHUB_REPOSITORY")"
+          REPO_BASE="$(printf "%s" "$REPO_BASE" | sanitize)"
+
+          # Decide whether to append date:
+          # - if user input append_date=true, OR
+          # - if running on main branch, OR
+          # - if running on a tag
+          SHOULD_APPEND="${{ inputs.append_date }}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" || "${GITHUB_REF_NAME}" == "main" ]]; then
+            SHOULD_APPEND="true"
+          fi
+
+          DATE_SUFFIX=""
+          if [[ "$SHOULD_APPEND" == "true" ]]; then
+            DATE_SUFFIX="_$(date +%Y%m%d)"
+          fi
+
+          PROJECT_NAME="${REPO_BASE}${DATE_SUFFIX}"
+
+          echo "APP_NAME=${APP_NAME}" >> "$GITHUB_ENV"
+          echo "PROJECT_NAME=${PROJECT_NAME}" >> "$GITHUB_ENV"
+
+      - name: Download Mend CLI
+        shell: bash
+        run: |
+          curl -LJO https://downloads.mend.io/production/unified/latest/linux_amd64/mend
+          chmod +x mend
+          ./mend --version || true
+
+      - name: Mend CLI Scan
+        env:
+          MEND_EMAIL: ${{ secrets.MEND_EMAIL_BEN_TEST }}
+          MEND_USER_KEY: ${{ secrets.MEND_EMAIL_BEN_TEST_KEY }}
+          MEND_URL: https://saas-eu.mend.io
+        shell: bash
+        run: |
+          echo "Using scope: ${ORG}//${APP_NAME}//${PROJECT_NAME}"
+          ./mend dep -u -s "${ORG}//${APP_NAME}//${PROJECT_NAME}" -r
+          ./mend code -s "${ORG}//${APP_NAME}//${PROJECT_NAME}" --snippet-size 0
+          ./mend image ubuntu:latest --scope "${ORG}//${APP_NAME}//${PROJECT_NAME}"
